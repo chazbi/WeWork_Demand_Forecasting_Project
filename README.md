@@ -1,7 +1,12 @@
 # WeWork
-This repo covers the core part of my intern project at WeWork (Jun. - Aug. 2019). The project aims to incorporate market demand into predicting WeWork's building occupancy and empowering pricing strategies. 
+This is the demand forecasting project I've done at WeWork. The project aims to incorporate market demand into predicting WeWork's building occupancy and empowering pricing strategies. 
 
-The demand proxies explored include,
+The data cleaning & manipulation pseudo-code can be found in the SQL file while the feature engineering and model training pseudo-codes can be found in the R file. The models explored are the linear regression, random forest and XGBoost.
+
+The XGBoost model learns the metrics on market demand, location attributes, and historic performance. Having learnt the patterns from January 2015 to April 2019, the model predicts the building-level occupancy for May, June, July of 2019. The predictions consistently fall within 3% margin of errors around the actual prediction.
+
+--------------------------------------------A list of variable used----------------------------------------------------
+The demand proxies used include,
 *   location-level demand
        * pct of rush bookings (i.e. reservations booked within 10 days prior to their move-in date)
        * monthly tour completed/booked
@@ -24,7 +29,9 @@ The demand proxies explored include,
        * Zendesk response time
        * happy hour counts
        * speaker event counts
-      
-Together with historical performance data, those metrics collectively predict building monthly occupancy rate with an accuracy of **97%**. If the actual building occupancy next month is 90%, the prediction will be consistently fall within (87%, 93%).
-
-The data cleaning & manipulation was done mostly in SQL while the feature engineering and model training were done in R. The models used are the linear regression, random forest and XGBoost.
+ 
+ The historic performance considered are,
+ * last 3 month's location average occupancy
+ * last 3 month's churn rate
+ * year
+ * month
