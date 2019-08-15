@@ -16,6 +16,7 @@ The demand proxies used include,
        * GDP per capital annual growth
        * unemployment rate
  
+ 
  The location attributes considered are,
  *   geographical factors
        * city
@@ -29,6 +30,7 @@ The demand proxies used include,
        * Zendesk response time
        * happy hour counts
        * speaker event counts
+ 
  
  The historic performance considered are,
  * last 3 month's location average occupancy
