@@ -10,7 +10,21 @@ The demand proxies explored include,
        * GDP per capital
        * GDP per capital annual growth
        * unemployment rate
-
-Together with metrics on location attribute (maturity, location, etc) and historic performance, the model has an accuracy of **97%**, meaning that if the actual building occupancy next month is 90%, then the prediction will be consistently fall within (87%, 93%).
+ 
+ The location attributes considered are,
+ *   geographical factors
+       * city
+       * market
+       * region
+ *   sales factors
+       * month_opened
+       * pct of presale reservables
+ *   community factors
+       * Zendesk satisfaction
+       * Zendesk response time
+       * happy hour counts
+       * speaker event counts
+      
+Together with historical performance data, those metrics collectively predict building monthly occupancy rate with an accuracy of **97%**. If the actual building occupancy next month is 90%, the prediction will be consistently fall within (87%, 93%).
 
 The data cleaning & manipulation was done mostly in SQL while the feature engineering and model training were done in R. The models used are the linear regression, random forest and XGBoost.
