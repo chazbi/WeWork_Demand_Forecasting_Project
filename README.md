@@ -2,8 +2,8 @@
 This repo covers the core part of my intern project at WeWork (Jun. - Aug. 2019). The project aims to incorporate market demand into predicting WeWork's building occupancy and empowering pricing strategies. 
 
 The demand proxies explored are both location-level demand and city-level demand. They are,
-    markup *   pct of rush bookings (i.e. reservations booked within 10 days prior to their move-in date)
-    *   monthly tour completed/booked
+*   pct of rush bookings (i.e. reservations booked within 10 days prior to their move-in date)
+*   monthly tour completed/booked
     *   tour conversion rate
     *   GDP per capital
     *   GDP per capital annual growth
