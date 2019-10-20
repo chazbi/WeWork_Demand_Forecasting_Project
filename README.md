@@ -1,4 +1,4 @@
-# WeWork Demand-Forecasting Project
+# Demand-Forecasting Project
 
 -- By Charles Haocheng Bi
 
