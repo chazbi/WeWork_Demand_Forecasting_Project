@@ -1,3 +1,32 @@
+---
+title: "Final Project Code"
+output:
+  html_document:
+    df_print: paged
+---
+
+#### Load Packages
+```{r, message = FALSE, error = FALSE, warning = FALSE}
+library(wepackage)
+library(plyr)
+library(dplyr)
+library(purrr)
+library(zoo)
+library(corrplot)
+library(ggcorrplot)
+library(ggbiplot)
+library(BBmisc)
+library(MLmetrics)
+library(olsrr)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(mlr)
+library(factoextra)
+library(pracma)
+```
+
 #### performance-based clustering
 ##### step 1: principal component analysis (PCA)
 Before clustering, we wanted to understand how performance indicators are related to each other. Principal Component Analysis can reduce dimensionality of a highly correlated dataset, so we can cluster buildings based on their most important performance metrics. 
