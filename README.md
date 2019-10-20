@@ -1,4 +1,4 @@
-# Demand-Forecasting Project
+# Demand-Forecast Project
 
 -- By Charles Haocheng Bi
 
