@@ -1,0 +1,79 @@
+---
+title: "PCA & Clustering"
+output: html_document
+---
+#### Load Packages
+```{r, message = FALSE, error = FALSE, warning = FALSE}
+library(wepackage)
+library(plyr)
+library(dplyr)
+library(purrr)
+library(zoo)
+library(corrplot)
+library(ggcorrplot)
+library(ggbiplot)
+library(BBmisc)
+library(MLmetrics)
+library(olsrr)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(mlr)
+library(factoextra)
+library(pracma)
+```
+
+#### performance-based clustering
+##### step 1: principal component analysis (PCA)
+Before clustering, we wanted to understand how performance indicators are related to each other. Principal Component Analysis can reduce dimensionality of a highly correlated dataset, so we can cluster buildings based on their most important performance metrics. 
+```{r}
+#principal component analysis
+data.pca <- prcomp(data[, c(9:13)], center = T, scale. = T)
+data.pca$rotation[, c(1:2)]    #first two PCA
+summary(data.pca)              #first two PCA combined explains 88% of the data variations
+ggbiplot(data.pca, scale = 0)  #visualize PCs
+```
+
+##### step 2: K-means clustering
+This section shows the work of building a performance-based clustering. In theory, data points that are in the same group should have similar properties and/or features, while data points in different groups should have highly dissimilar properties and/or features. That said, this clustering serves as an indicator of building's historical performance.
+
+Using wss and silhouette methods, the optimal number of clusters is 3. The k-means algorithm of 3 clusters runs for 25 times where it chooses the best clustering result. Based on the average performance metrics by cluster, cluster 1 is the cluster of high performers, while cluster 3 is the cluster of the under performers. Clusters might vary (this time maybe cluster 1 is the high performance cluster, next time may be cluster 5) according to the seed set but the results are the same. The wss and silhouette codes are currently commented out for faster running.
+```{r, warning = F}
+#scale data
+data_scaled <- scale(data[,c(11:13)])
+
+##determine number of clusters
+  #method 1: look at total withiness
+#fviz_nbclust(data_scaled, kmeans, method = "wss") + geom_vline(xintercept = 3, linetype = 2) 
+
+  #method 2: silhouette
+  #fviz_nbclust(data_scaled, kmeans, method = "silhouette") 
+
+#kmeans clustering with 3 clousters and runs 25 times and chooses the best one.
+fit <- kmeans(data_scaled, 6, nstart = 25)
+
+#visualize k-means clustering
+fviz_cluster(fit, geom = "point", data = data_scaled)
+
+#append cluster assignment
+data_labeled <- dplyr::rename(data.frame(data, fit$cluster), perf_label = fit.cluster)
+table(data_labeled$perf_label)
+data_labeled %>% ggplot(aes(x = occ, y = discount, color = as.factor(perf_label))) + geom_point()
+
+#check cluster results
+ggplot(aes(occ, discount, color = factor(perf_label), label = name), data = data_labeled) + geom_point() 
+
+#determine clusters
+aggregate(data_labeled[, 9:13],by=list(fit$cluster),FUN=mean) #(from best to worst): 2,1,5,6,4,3
+
+### reorder the cluster label to cluster 1 being the best cluster and cluster 6 being the worst
+#### this is to make the performance_cluster meaningful (as we are going to take average)
+data_labeled <-  mutate(data_labeled, performance_cluster = ifelse(perf_label == 2, 1, 
+                                                                 ifelse(perf_label == 1, 2, 
+                                                                     ifelse(perf_label == 5, 3, 
+                                                                        ifelse(perf_label == 6, 4,
+                                                                               ifelse(perf_label == 4, 5, 6)))))) %>% select(-perf_label)
+#check data again (now the performance cluster actually means something)
+head(data_labeled)
+```

@@ -1,0 +1,457 @@
+---
+title: "Final Project Code"
+author: "Charles Haocheng Bi"
+output:
+  html_document:
+    df_print: paged
+---
+####      ----------------------------------------- modeling section ------------------------------------------
+##### 0. training and testing data split 
+We use data from Jan 2015 to Apr 2019 (7147 rows) to train models that predict the occupancy for May-July 2019. The metric we are using to evaluate the model is RMSE (root mean squared errors), the standard deviations of errors, and MAE (mean absolute errors), the average absolute errors.
+```{r}
+test_df <- model_data %>% filter(date >= "2019-05-01")
+train_df <- model_data %>% filter(date < "2019-05-01")
+test_df <- na.omit(test_df)
+train_df <- na.omit(train_df)
+dim(test_df)   #1288 obs
+dim(train_df)  #7147 obs
+```
+
+##### 1. time series moving average (RMSE = 0.126, MAE = 0.081)
+Time series moving average model serves as a simple benchmark to evaluate machine learning models. The idea is to use the past 3 month's building occupancy rate as the prediction for next month's occupancy. The drawback of this model are clear: first, it doesn't capture the trends of the past 3 months. For example, if a building historical occupancy rate has been 80%, 85%, 87%. Then moving average will give us 84%, which is quite counterintuitive given the upward trend. In context, this drawback means that the model can't predict monthly performances during building's ramp-up stage, where the occupancy changes very drastically.
+```{r}
+ts_data <- tidyr::drop_na(tidyr::spread(filter(select(model_data, name, date, occ), date >= "2019-02-01" & date <= "2019-07-01"), key = date, value = occ))
+dim(ts_data)   #324 rows
+head(ts_data)
+
+ts_train <- ts_data[1:4]
+ts_test <- ts_data[5:7]
+ts_pred <- mutate(ts_train, 
+                    `2019-05-01` = (`2019-02-01` + `2019-02-01` + `2019-02-01`)/3,
+                    `2019-06-01` = (`2019-03-01` + `2019-04-01` + `2019-05-01`)/3,
+                    `2019-07-01` = (`2019-04-01` + `2019-05-01` + `2019-06-01`)/3)
+actual5 <- as.vector(ts_test[, "2019-05-01", drop = T])
+actual6 <- as.vector(ts_test[, "2019-06-01", drop = T])
+actual7 <- as.vector(ts_test[, "2019-07-01", drop = T])
+actual <- c(actual5, actual6, actual7)
+
+pred5 <- as.vector(ts_pred[, "2019-05-01", drop = T])
+pred6 <- as.vector(ts_pred[, "2019-06-01", drop = T])
+pred7 <- as.vector(ts_pred[, "2019-07-01", drop = T])
+ts_pred <- c(pred5, pred6, pred7)
+ts_results <- data.frame(ts_pred, actual)
+
+##### calculate RMSE
+ts_rmse <- RMSE(ts_pred, actual)  
+ts_rmse      #0.126
+
+##### calculate Mean Absolute Error
+ts_mae <- mean(abs(ts_pred-actual))
+ts_mae       #0.081
+
+##### visualize model limitations with an example
+case_data <- model_data %>% filter(name == '12 E 49th St') %>% select(occ, date)
+case_pred <- movavg(as.numeric(case_data$occ), 3, type = 's')
+data.frame(case_pred, case_data) %>% 
+  ggplot(aes(date)) +
+  geom_line(aes(y = occ, color = "actual occupancy")) + 
+  geom_line(aes(y = case_pred, color = "moving average predicted occupancy")) + 
+  ggtitle("The predictions are good later as the occupancy stabilizes")
+```
+
+
+####  2. linear regression (RMSE = 0.0821)
+All together, I trained four linear regression models. The first model is a linear regression model using all features (except for the historical occupancy, city and region). The second model drops the insiginificant and highly correlated features. The third model is a ridge regression and the fourth is a lasso regression - both of them attempted to prevent overfitting. The best linear regression model is trained using LASSO regression with RMSE = 0.091.
+
+    * 1st: linear regression (all features)
+    * 2nd: linear regression (17 features)
+    * 3rd: ridge regression
+    * 4th: lasso regression
+Before we move onto models, let's normalize & hot-encode features.
+```{r}
+#get rid of unused variables
+lm_train <- subset(train_df, select = -c(name, city, market, date, historical_occupancy))
+lm_test <- subset(test_df, select = -c(name, city, market, date, historical_occupancy))
+#scale data
+lm_train <- data.frame(lm_train[1:5], scale(lm_train[, 6:29]))  
+lm_test <- data.frame(lm_test[1:5], scale(lm_test[, 6:29]))
+#double check on NAs
+lm_train <- na.omit(lm_train)   
+lm_test <- na.omit(lm_test)
+```
+
+The best linear model is the LASSO regression with RMSE of **0.0821** and MAE of ****
+**The variables used are**: year, month, region*discount, is_mature, median_lead_time,  rush_booking_pct,  sales_time_per_desk,  tour_booked_per_sellable_capacity, churn_rate, tour_completed_per_sellable_capacity,  printing_issue_count, ac_issue_solve_speed,  maintenance_issue_solve_speed, performance_cluster, event_participation_rate,  avg_signup_per_event
+```{r}
+#### ------------------------------- linear model 1 (RMSE = 0.08, MAE = 0.06, Rsquared = 0.805) --------------------------------------
+#let's build a linear model with all of our variables
+lm_model1 <- lm(occ ~., data = lm_train)  #building a linear regression with all the features
+summary(lm_model1)                         #check model summary, RSquared = 0.805
+par(mfrow = c(2,2))
+plot(lm_model1)     # the diagnostic plot suggests that the errors are not normally distributed 
+
+## linear model 1 prediction
+lm_pred1 <- predict(lm_model1, lm_test)
+actual_occupancy <- test_df$occ
+lm_rmse1 <- RMSE(lm_pred1, actual_occupancy)
+lm_rmse1           #RMSE = 0.08
+lm_mae1 <- mean(abs(lm_pred1 -  actual_occupancy))
+lm_mae1            #MAE = 0.06
+head(data.frame(lm_pred1, actual_occupancy)) # check predicted vs. actual occupancy
+
+
+#### ---------------------------------- linear model 2 (RMSE = 0.0803, MAE = 0.603, Rsquared = 0.805)-----------------------------------------
+###linear model 2 only used 17 features and dropped all insignificant and highly-correlated variables
+###once we took care of the overfitting issue, the RMSE actually improved
+lm_model2 <- lm(occ ~ year + month + region + discount + is_mature + median_lead_time  + rush_booking_pct + churn_rate + 
+                  sales_time_per_desk + tour_booked_per_sellable_capacity  + tour_completed_per_sellable_capacity  +  
+                  printing_issue_count  + maintenance_issue_solve_speed  + 
+                  performance_cluster + event_participation_rate + avg_signup_per_event, 
+                data = lm_train)
+summary(lm_model2)  #R squared = 0.79
+
+#check diagnostic plots
+par(mfrow = c(2,2))
+plot(lm_model2)
+
+#check collinearity
+vif <- ols_vif_tol(lm_model2)   
+vif[vif$VIF > 4, ]              #the only variables with high collinearity are year and market variables
+
+#make predictions
+lm_pred2 <- as.vector(predict(lm_model2, lm_test))
+lm_rmse2 <- RMSE(lm_pred2, actual_occupancy)
+lm_rmse2           ##mean squared errors = 0.0803
+lm_mae2 <- mean(abs(lm_pred2 - actual_occupancy))
+lm_mae2            ### mean absolute errors = 0.0603
+head(data.frame(lm_pred2, actual_occupancy)) # check predicted vs. actual occupancy
+
+
+#### -------------------- linear model 3: Ridge Regression (RMSE = 0.086, MAE = 0.064) -------------------
+#     get predictor variables
+x <- model.matrix(occ ~ year + month + region + discount + is_mature + median_lead_time  + rush_booking_pct + churn_rate + 
+                  sales_time_per_desk + tour_booked_per_sellable_capacity  + tour_completed_per_sellable_capacity  +  
+                  printing_issue_count  + maintenance_issue_solve_speed  + 
+                  performance_cluster + event_participation_rate + avg_signup_per_event,
+                data = lm_train)[,-1]
+#     get outcome variable
+y <- lm_train$occ
+
+#     compute penalized ridge regression
+glmnet(x, y, alpha = 1, lambda = NULL)  #alpha = 1 indicates ridge regression
+
+#     find the best lambda using cross-validation
+set.seed(123) 
+cv <- cv.glmnet(x, y, alpha = 0)
+#     display the best lambda value
+cv$lambda.min   #0.01387462
+
+#     fit the final model on the training data
+lm_model3 <- glmnet(x, y, alpha = 0, lambda = cv$lambda.min)
+print(lm_model3)
+#     display regression coefficients
+coef(lm_model3)
+
+#     make predictions on the test data
+x.test <- model.matrix(occ ~ year + month + region + discount + is_mature + median_lead_time  + rush_booking_pct + churn_rate + 
+                  sales_time_per_desk + tour_booked_per_sellable_capacity  + tour_completed_per_sellable_capacity  +  
+                  printing_issue_count  + maintenance_issue_solve_speed  + 
+                  performance_cluster + event_participation_rate + avg_signup_per_event,
+                data = lm_test)[,-1]
+ridge_predictions <-  as.vector(predict(lm_model3, x.test))
+#     model performance metrics
+lm_rmse3 <- RMSE(ridge_predictions, test_df$occ)  #RMSE = 0.086
+lm_rmse3
+lm_mae3 <- mean(abs(ridge_predictions - test_df$occ))
+lm_mae3   #mae = 0.064
+
+#### ----------------linear model 4: LASSO Regression, RMSE = 0.0805, MAE = 0.064)  -------------------------------
+# Find the best lambda using cross-validation
+set.seed(123) 
+cv <- cv.glmnet(x, y, alpha = 1)
+# Display the best lambda value
+cv$lambda.min
+
+# Fit the final model on the training data
+lm_model4 <- glmnet(x, y, alpha = 1, lambda = cv$lambda.min)
+print(lm_model4)
+# Dsiplay regression coefficients
+coef(lm_model4)
+# Make predictions on the test data
+lasso_predictions <- as.vector(predict(lm_model4, x.test))
+# Model performance metrics
+lm_rmse4 <- RMSE(lasso_predictions, test_df$occ)  ##rmse = 0.0805
+lm_rmse4
+lm_mae4 <- mean(abs(lasso_predictions- test_df$occ))
+lm_mae4  #0.0604
+
+#### compare results
+data.frame(lm_rmse1, lm_rmse2, lm_rmse3, lm_rmse4)  #choose linear model 4
+data.frame(lm_mae1, lm_mae2, lm_mae3, lm_mae4)      #chose linear model 2
+coef(lm_model4)
+```
+
+### 3. Random Forest (best RMSE = 0.0508, MAE = 0.0323)
+
+#### default random forest model (RMSE = 0.053, MAE = 0.036)
+Here I built a random forest model with seleted variables and the default parameters. Please see the variable importance plot below.
+```{r}
+# split data
+rf_train <- subset(train_df, select = -c(name, city, market, date, year, month, performance_cluster, tour_completed_per_sellable_capacity, median_lead_time))
+rf_test <- subset(test_df, select = -c(name, city, market, date, year, month, performance_cluster, tour_completed_per_sellable_capacity, median_lead_time))
+
+# ------------------------------------------------- default random forest model ---------------------------------------------- 
+trControl <- trainControl(method = "cv",
+    number = 5,
+    search = "grid")
+
+set.seed(12)
+rf_default <- randomForest(occ ~., data = rf_train, ntree = 200, mtry = 7, important = T)
+print(rf_default)
+importance(rf_default)
+varImpPlot(rf_default,type=2)           #mean decrease in node impurity
+rf_pred <- predict(rf_default, rf_test) #make prediction
+data.frame(rf_pred, rf_test$occ)        #check predictions
+#rmse = 0.0535
+rf_default_rmse <- RMSE(rf_pred, rf_test$occ)  
+rf_default_rmse
+#mae = 0.0359
+rf_default_mae <- mean(abs(rf_pred - rf_test$occ))
+rf_default_mae
+
+## variable importance
+randomForest::getTree(rf_default, k = 1,labelVar=TRUE)
+plot(rf_default, type = "simple")
+```
+
+
+#### random forest parameter tuning
+Here we attempted to search for the best mtry. I didn't use grid search to prevent overfitting of the random forest model.
+```{r}
+#----------------------------------------------------- parameter tuning
+ ### search for best mtry (mtry = 17)
+a=c()
+i= 5
+for (i in 15:20) {
+  rf_model <- randomForest(occ ~., data = rf_train, ntree = 200, mtry = i, importance = TRUE)
+  rf_pred1 <- predict(rf_model, rf_test)
+  a[i-14] = RMSE(rf_pred1, rf_test$occ)
+}
+a
+plot(15:20,a)
+
+## final random forest model
+final_rf <- randomForest(occ ~., data = rf_train, ntree = 200, mtry = 17, important = T)
+print(final_rf)
+importance(final_rf)
+varImpPlot(final_rf,type=2)           #mean decrease in node impurity
+final_rf_pred <- predict(final_rf, rf_test) #make prediction
+final_rf_rmse <- RMSE(final_rf_pred, rf_test$occ)  #rmse = 0.0508
+final_rf_rmse  
+final_rf_mae <- mean(abs(final_rf_pred - rf_test$occ)) #mae = 0.0323
+final_rf_mae
+
+#### 30.9% have MAE less than 1%, 51.09% have MAE less than 2%, 78.7% have MAE less than 5%, 94.9% have MAE less than 10%. 
+count(abs((final_rf_pred - rf_test$occ)) < 0.1)
+count(abs((final_rf_pred - rf_test$occ)) < 0.05)
+count(abs((final_rf_pred - rf_test$occ)) < 0.02)
+count(abs((final_rf_pred - rf_test$occ)) < 0.01)
+```
+
+
+### 4. XGBoost model (RMSE = 0.0512, MAE = 0.0329)
+In this section, we will prepare data and build an initial XGBoost model. The RMSE of the initial model is 0.0516. When looking at the variable importance, we realized that this XGBoost model is dominately shaped by the `historical_occupancy` variable, which is the first variable the tree split on.
+```{r}
+xgb_data <- subset(model_data, select = -c(name, city, market, year, month, performance_cluster))
+xgb_train <- xgb_data %>% filter(date < '2019-05-01') %>% select(-date)
+xgb_test <- xgb_data %>% filter(date >= '2019-05-01') %>% select(-date)
+
+##dummify variables
+train_labels <- xgb_train$occ
+test_labels <- xgb_test$occ
+new_tr <- model.matrix(~.+0, data = subset(xgb_train, select = -c(occ))) 
+new_ts <- model.matrix(~.+0, data = subset(xgb_test, select = -c(occ)))
+
+##preparing xgb matrices
+dtrain <- xgb.DMatrix(data = new_tr, label = train_labels) 
+dtest <- xgb.DMatrix(data = new_ts, label = test_labels)
+
+#default parameters
+params <- list(booster = "gbtree", objective = "reg:linear", eta=0.3, gamma=0.01, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+
+## best nround
+set.seed(1234)
+xgbcv <- xgb.cv(params = params, data = dtrain, nrounds = 200, nfold = 10, showsd = T, stratified = T, print_every_n = T,
+                early.stop.round = 10, maximize = F) ### best iteration = 22
+
+## default model prediction
+xgb1 <- xgb.train(params = params, 
+                  data = dtrain, 
+                  nrounds = 22, 
+                  watchlist = list(val=dtest,train=dtrain), 
+                  print_every_n = 10, 
+                  early_stop_round = 10, 
+                  maximize = F, 
+                  eval_metric = "error")
+
+xgbpred <- predict(xgb1, dtest)
+
+xgb_rmse <- RMSE(xgbpred, test_labels) 
+xgb_rmse    #0.0516
+xgb_mae <- mean(abs(xgbpred - test_labels))
+xgb_mae     #0.327
+
+###--------------------------------------- check and evaluate predictions --------------------------------
+#results: 94.02% with 0.9 accuracy, 79.8% with 0.95 accuracy, 50.46% with 0.98 accuracy
+count(abs((xgbpred - test_labels)) < 0.1)  
+count(abs((xgbpred - test_labels)) < 0.05) 
+count(abs((xgbpred - test_labels)) < 0.02) 
+
+##variable importance
+### the variable importance is strongly skewed towards historical occupancy, which is the first variable the tree split on
+mat <- xgb.importance(feature_names = colnames(new_tr), model = xgb1)
+xgb.plot.importance (importance_matrix = mat[1:15])
+```
+
+
+### --------------------------------------------- parameter tuning ------------------------------------------------
+We will go on to tune the model parameters.
+
+Final parameters are output below,
+
+     * nrounds = 121
+     * max_depth = 4
+     * eta = 0.1567508
+     * lambda = 0.1327131
+
+```{r}
+#create tasks
+traintask <- makeRegrTask(data = data.frame(xgb_train), target = "occ")
+testtask <- makeRegrTask(data = data.frame(xgb_test), target = "occ")
+traintask <- createDummyFeatures(obj = traintask)
+testtask <- createDummyFeatures(obj = testtask)
+
+#set learner
+lrn <- makeLearner("regr.xgboost",predict.type = "response")
+lrn$par.vals <- list(
+             objective="reg:linear",
+             eval_metric="error",
+             nrounds=1L,
+             eta=0.1
+)
+
+xgb_params <- makeParamSet(
+  # The number of trees in the model (each one built sequentially)
+  makeIntegerParam("nrounds", lower = 100, upper = 200),
+  # number of splits in each tree
+  makeIntegerParam("max_depth", lower = 1, upper = 5),
+  # "shrinkage" - prevents overfitting
+  makeNumericParam("eta", lower = .1, upper = .3),
+  # L2 regularization - prevents overfitting
+  makeNumericParam("lambda", lower = -1, upper = 0, trafo = function(x) 10^x)
+)
+
+# set search strategy
+control <- makeTuneControlRandom(maxit = 5L)
+
+# prevent overfitting using cross-validation 
+resample_desc <- makeResampleDesc("CV", iters = 5L)
+
+# a list of parameters tuned
+tuned_params <- tuneParams(
+  learner = lrn,
+  task = traintask,
+  resampling = resample_desc,
+  par.set = xgb_params,
+  control = control,
+  show.info = T
+)
+
+###check parameters tuned
+tuned_params$x   #see a list of tuned parameters
+tuned_params$y   #mse.test.mean = 0.0019
+```
+
+
+### ------------------------- final xgboost model (RMSE = 0.0512, MAE = 0.0329)-----------------------------------------------------
+```{r}
+##tuned parameters
+lrn_tune <- setHyperPars(
+  learner = lrn,
+  par.vals = tuned_params$x
+)
+
+#train model
+xgmodel <- mlr::train(learner = lrn_tune,task = traintask)
+
+#final prediction
+xgb_finalpred <- predict(xgmodel, testtask)
+xgb_final_results <- data.frame(xgb_finalpred$data$truth, xgb_finalpred$data$response)
+names(xgb_final_results) <- c("actual_occupancy", "xgb_predicted_occupancy")
+xgb_final_results
+
+##evaluate
+xgb_rmse_final <- RMSE(final_results$actual_occupancy, final_results$xgb_predicted_occupancy) 
+xgb_rmse_final    #0.0512
+xgb_mae_final <- mean(abs(final_results$actual_occupancy - final_results$xgb_predicted_occupancy))
+xgb_mae_final     #0.0329
+
+### check results
+#### 29.5% have MAE less than 1%, 48.5% have MAE less than 2%, 81% have MAE less than 5%, 94.3% have MAE less than 10%. 
+count(abs((final_results$xgb_predicted_occupancy - final_results$actual_occupancy)) < 0.1) 
+count(abs((final_results$xgb_predicted_occupancy - final_results$actual_occupancy)) < 0.05) 
+count(abs((final_results$xgb_predicted_occupancy - final_results$actual_occupancy)) < 0.02) 
+count(abs((final_results$xgb_predicted_occupancy - final_results$actual_occupancy)) < 0.01)
+```
+
+#### feature importance (exclude historical performance)
+As discussed, XGBoost model heavily geared towards `historical_occupancy` feature. We are thus interested in knowing how well the XGBoost model can perform without the historical occupancy feature and its variable importance.
+```{r}
+xgb_data <- subset(model_data, select = -c(name, city, market, year, month, historical_occupancy, performance_cluster, tour_completed_per_sellable_capacity, median_lead_time))
+xgb_train <- xgb_data %>% filter(date < '2019-05-01') %>% select(-date)
+xgb_test <- xgb_data %>% filter(date >= '2019-05-01') %>% select(-date)
+
+##dummify variables
+train_labels <- xgb_train$occ
+test_labels <- xgb_test$occ
+new_tr <- model.matrix(~.+0, data = subset(xgb_train, select = -c(occ))) 
+new_ts <- model.matrix(~.+0, data = subset(xgb_test, select = -c(occ)))
+
+##preparing xgb matrices
+dtrain <- xgb.DMatrix(data = new_tr, label = train_labels) 
+dtest <- xgb.DMatrix(data = new_ts, label = test_labels)
+
+#default parameters
+params <- list(booster = "gbtree", objective = "reg:linear", eta=0.3, gamma=0.01, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+
+## best nround
+set.seed(1234)
+xgbcv <- xgb.cv(params = params, data = dtrain, nrounds = 200, nfold = 10, showsd = T, stratified = T, print_every_n = T,
+                early.stop.round = 10, maximize = F) ### best iteration = 22
+
+## default model prediction
+xgb1 <- xgb.train(params = params, 
+                  data = dtrain, 
+                  nrounds = 52, 
+                  watchlist = list(val=dtest,train=dtrain), 
+                  print_every_n = 10, 
+                  early_stop_round = 10, 
+                  maximize = F, 
+                  eval_metric = "error")
+
+xgbpred <- predict(xgb1, dtest)
+
+xgb_rmse <- RMSE(xgbpred, test_labels) 
+xgb_rmse    #0.0518
+xgb_mae <- mean(abs(xgbpred - test_labels))
+xgb_mae     #0.331
+
+###--------------------------------------- check and evaluate predictions --------------------------------
+count(abs((xgbpred - test_labels)) < 0.05)  #results: 94.6% with 0.9 accuracy, 80.5% with 0.95 accuracy, 51.5% with 0.98 accuracy
+
+##variable importance
+mat <- xgb.importance(feature_names = colnames(new_tr), model = xgb1)
+xgb.plot.importance (importance_matrix = mat[1:15])
+round(mat$Gain,3)
+```
+

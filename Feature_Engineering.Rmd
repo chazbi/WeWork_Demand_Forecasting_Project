@@ -1,0 +1,195 @@
+---
+title: "Feature Engineering"
+output: html_document
+---
+#### Data Cleaning & Processing
+This section checks missing values, creates 6 new features (e.g. tour conversion rate, tour booked every sellable capacity, etc), and 
+checks data abnormality. 
+```{r}
+#check for missing values (no missing values)
+tidyr::gather(summarize_each(data_labeled, funs(sum(is.na(.))/n())), key = "feature", value = "missing_pct")
+data_labeled <- na.omit(data_labeled)  #drop NAs if any
+
+#create new features
+data_labeled <- dplyr::mutate(data_labeled, 
+                      tour_conversion = tour_completed / ifelse(tour_booked == 0, 1, tour_booked),
+                      tour_booked_per_sellable_capacity = tour_booked / ifelse(sellable_capacity == 0, 1, sellable_capacity),
+                      tour_completed_per_sellable_capacity = tour_completed / ifelse(sellable_capacity == 0, 1, sellable_capacity),
+                      sales_time_per_desk = total_sales_time / ifelse(desks_sold ==0, 1, desks_sold),
+                      avg_signup_per_event = total_attendee / ifelse(total_event == 0, 1, total_event),
+                      event_participation_rate = total_attendee / ifelse(occupied_capacity == 0, 1, occupied_capacity))
+head(data_labeled)
+
+## check data abnormality
+summary(data_labeled)   
+##     issue 1: event participation shouldn't be a negative number or anything too high (>100)
+data_labeled <- data_labeled[data_labeled$event_participation_rate >= 0 | data_labeled$event_participation_rate <= 100,]  
+##     issue 2: tour conversion rate is a percentage so it shouldn't go over 1
+data_labeled <- data_labeled[data_labeled$tour_conversion < 2, ]
+##     issue 3: shouldn't be any is_mature 
+data_labeled <- data_labeled[data_labeled$is_mature != -1, ]
+##     issue 4: median lead time abnormality
+data_labeled <- data_labeled[!(data_labeled$median_lead_time > 100 & data_labeled$occ < 0.8), ]
+##     issue 5: ac_issue_count abnormality (data accuracy)
+data_labeled <- data_labeled[data_labeled$ac_issue_count <= 1000, ]
+dim(data_labeled)  #9431 x 49
+```
+
+#### Numerical Variables Check
+Before we build the model, we want to take a look at the distribution of all numeric variables for the purposes of initial selection.
+```{r}
+## check numerical variable distribution
+#### category 1: year, month, performance variables
+data_labeled %>%
+  select(year, month, net_arpm, gross_arpm, occ, financial_occ, discount) %>% 
+  tidyr::gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+
+##### category 2: market demand variables
+data_labeled %>% 
+  select(median_lead_time, rush_booking_pct, tour_booked_per_sellable_capacity, tour_booked_per_sellable_capacity, tour_conversion,
+         sales_time_per_desk, churn_rate) %>% 
+  tidyr::gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+
+##### category 3: Zendesk variables
+data_labeled %>% 
+  select(printing_issue_count, ac_issue_count, billing_issue_count, maintenance_issue_count, printing_issue_solve_speed, ac_issue_solve_speed, billing_issue_solve_speed, maintenance_issue_solve_speed) %>% 
+  tidyr::gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+
+#### category 4: event variables
+#### community event, office hour event, orientation event, other_event might not be good predictors
+data_labeled %>% 
+  select(happy_hour_event, tgim_event, business_development_event, food_for_thought_event, office_hour_event, community_event, other_event, total_event, total_attendee, orientation_event, wellness_event, total_event, business_development_event, avg_signup_per_event, event_participation_rate) %>% 
+  tidyr::gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+```
+
+
+#### Feature Engineering
+This section details the steps of feature engineering: turning the character-type metrics into factors, taking 3-month's moving average of metrics, and sanity-checking data. 
+
+The idea of taking moving average of all the metrics is to create a window for prediction. This makes sense from both a business and a technical perspective. From the business perspective, the hypothesis is that the future occupancy is highly dependent on how the building and market performed the past 3 months. From the technical perspective, a 3-month window is needed so that the prediction could be performed ahead of time.
+```{r}
+#-------------feature engineering--------------
+#### 1. change character into factor type
+data_labeled$name <- as.factor(data_labeled$name)
+data_labeled$year <- as.factor(data_labeled$year)
+data_labeled$month <- as.factor(data_labeled$month)
+data_labeled$city <- as.factor(data_labeled$city)
+data_labeled$market <- as.factor(data_labeled$market)
+data_labeled$region <- as.factor(data_labeled$region)
+data_labeled$is_mature <- as.factor(data_labeled$is_mature)
+head(data_labeled)
+
+#### 2. moving average
+model_data <- data_labeled %>% 
+  dplyr::group_by(name) %>% 
+  dplyr::mutate(historical_occupancy = rollapply(occ, 3, mean, align = 'right', fill = NA),
+                performance_cluster = rollapply(performance_cluster, 3, mean, align = 'right', fill = NA),
+                median_lead_time = rollapply(median_lead_time, 3, mean, align = 'right', fill = NA),
+                rush_booking_pct = rollapply(rush_booking_pct, 3, mean, align = 'right', fill = NA),
+                tour_conversion = rollapply(tour_conversion, 3, mean, align = 'right', fill = NA),
+                tour_booked = rollapply(tour_booked, 3, mean, align = 'right', fill = NA),
+                tour_completed = rollapply(tour_completed, 3, mean, align = 'right', fill = NA),
+                desks_sold = rollapply(desks_sold, 3, mean, align = 'right', fill = NA),
+                total_sales_time = rollapply(total_sales_time, 3, mean, align = 'right', fill = NA),
+                tour_booked_per_sellable_capacity = rollapply(tour_booked_per_sellable_capacity, 3, mean, align = 'right', fill = NA),
+                tour_completed_per_sellable_capacity = rollapply(tour_completed_per_sellable_capacity, 3, mean, align = 'right', fill = NA),
+                sales_time_per_desk = rollapply(sales_time_per_desk, 3, mean, align = 'right', fill = NA),
+                churn_rate = rollapply(churn_rate, 3, mean, align = 'right', fill = NA),
+                printing_issue_count = rollapply(printing_issue_count, 3, mean, align = 'right', fill = NA),
+                ac_issue_count = rollapply(ac_issue_count, 3, mean, align = 'right', fill = NA),
+                billing_issue_count = rollapply(billing_issue_count, 3, mean, align = 'right', fill = NA),
+                maintenance_issue_count = rollapply(maintenance_issue_count, 3, mean, align = 'right', fill = NA),
+                printing_issue_solve_speed = rollapply(printing_issue_solve_speed, 3, mean, align = 'right', fill =NA),
+                ac_issue_solve_speed = rollapply(ac_issue_solve_speed, 3, mean, align = 'right', fill = NA),
+                billing_issue_solve_speed = rollapply(billing_issue_solve_speed, 3, mean, align = 'right', fill = NA),
+                maintenance_issue_solve_speed = rollapply(maintenance_issue_solve_speed, 3, mean, align = 'right', fill = NA),
+                other_event = rollapply(other_event, 3, mean, align = 'right', fill = NA),
+                business_development_event = rollapply(business_development_event, 3, mean, align = 'right', fill = NA),
+                happy_hour_event = rollapply(happy_hour_event, 3, mean, align = 'right', fill = NA),
+                tgim_event = rollapply(tgim_event, 3, mean, align = 'right', fill = NA),
+                food_for_thought_event = rollapply(food_for_thought_event, 3, mean, align = 'right', fill = NA),
+                office_hour_event = rollapply(office_hour_event, 3, mean, align = 'right', fill = NA),
+                orientation_event = rollapply(orientation_event, 3, mean, align = 'right', fill = NA),
+                wellness_event = rollapply(wellness_event, 3, mean, align = 'right', fill = NA),
+                avg_signup_per_event = rollapply(avg_signup_per_event, 3, mean, align = 'right', fill = NA),
+                total_event = rollapply(total_event, 3, mean, align = 'right', fill = NA),
+                total_attendee = rollapply(total_attendee, 3, mean, align = 'right', fill = NA),
+                event_participation_rate = rollapply(event_participation_rate, 3, mean, align = 'right', fill = NA)) %>% 
+  select(-c("net_arpm", "gross_arpm", "financial_occ", "sellable_capacity", "total_capacity", "occupied_capacity", "community_event", "orientation_event", "office_hour_event", "other_event", "tour_booked", "tour_completed", "desks_sold", "total_sales_time", "total_event", "total_attendee"))
+
+model_data <- na.omit(model_data)  #drop NA's from taking moving average
+dim(model_data)                    #8435, 34
+
+#### 3. sanity-check model_data
+head(model_data)
+table(model_data$performance_cluster)  #check averaged performance cluster
+#write.csv(model_data, "model_final_data.csv")   #only write data when necessary
+```
+
+##### correlation analysis
+Before we move onto the modeling part, we want to get a quick look at the correlations of occupancy and features as an initial selection. I divided up the variables into sales, tour, event, and zendesk categories and used the correlation matrices to visualize variable correlation.
+
+From the correlation analysis, median_lead_time, rush_booking_pct, desks_sold, tour_booked_per_sellable_capacity, tour_conversion, event_participation_rate, avg_sign_up_per_event, maintenance_issue_count, and billing_issue_solve_speed are correlated to occupancy. The matrices also identified highly-correlated variable pairs, including tour_booked_per_sellable_capacity and tour_completed_per_sellable_capacity.
+```{r}
+#### important sales variables
+new_data <- model_data %>% filter(date > '2018-01-01')
+sales_matrix <- as.matrix(model_data[c("occ","discount", "median_lead_time", "rush_booking_pct", "sales_time_per_desk", "churn_rate")])
+
+sales_matrix %>% 
+  cor() %>% 
+  round(3) %>% 
+  ggcorrplot(lab = T, 
+             colors = c("#6D9EC1", "white", "#E46726"),
+             outline.col = "white",
+             ggtheme = ggplot2::theme_gray) + 
+             ggtitle('Occupancy vs. Sales Metrics')
+
+#### important tour variables
+tour_matrix <- as.matrix(model_data[c("occ", "tour_booked_per_sellable_capacity", "tour_completed_per_sellable_capacity", "tour_conversion")])
+
+tour_matrix %>% 
+  cor() %>% 
+  round(3) %>% 
+  ggcorrplot(lab = T, 
+             colors = c("#6D9EC1", "white", "#E46726"),
+             outline.col = "white",
+             ggtheme = ggplot2::theme_gray) + 
+             ggtitle('Occupancy vs. Tour Metrics')
+
+#### important event variables
+event_matrix <- as.matrix(new_data[c("occ","tgim_event",  "wellness_event", "avg_signup_per_event", "event_participation_rate")])
+
+event_matrix %>% 
+  cor() %>% 
+  round(3) %>% 
+  ggcorrplot(lab = T, 
+             colors = c("#6D9EC1", "white", "#E46726"),
+             outline.col = "white",
+             ggtheme = ggplot2::theme_gray) + 
+             ggtitle('Occupancy vs. Event Metrics')
+
+#### important zendesk variable
+zendesk_matrix <- as.matrix(new_data[c("occ", "ac_issue_count","maintenance_issue_count", "printing_issue_solve_speed","billing_issue_solve_speed", "printing_issue_count" )])
+
+zendesk_matrix %>% 
+  cor() %>% 
+  round(3) %>% 
+  ggcorrplot(lab = T, 
+             colors = c("#6D9EC1", "white", "#E46726"),
+             outline.col = "white",
+             ggtheme = ggplot2::theme_gray) + 
+             ggtitle('Occupancy vs. Zendesk Metrics')
+```
+
