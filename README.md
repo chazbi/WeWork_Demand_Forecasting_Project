@@ -3,7 +3,7 @@
 -- By Charles Haocheng Bi
 
 ## Goal
-The goal of this project is to forecast demand down to the building level by tracking the metric `occupancy`. The benefits of knowing the occupancy for future months in advance is obvious: it allows the team to decide an optimal discount level to maximize utilization and revenue. 
+The goal of this project is to forecast demand down to the building level by predicting the metric `occupancy`. The benefits of knowing the occupancy for future months in advance is obvious: it allows the team to decide an optimal discount level to maximize utilization and revenue. 
 
 ## Approach
 I first identified buildings' key performance drivers: market demand, member experience, historical performance, and the price variable, discount. Then I explored 8 internal data sources and 14 tables to extract 31 location-specific features. I listed a couple proxies for each category below.
@@ -18,5 +18,3 @@ The best model is Random Forest with a RMSE = 0.0508. Looking restrospectively, 
 
 ## Applications
 This model takes `discount` as an input and output the predicted occupancy according to the discount and other location-specific factors. The application is a one-click discount solution, an internal tool for revenue optimization team.
-
-
