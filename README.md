@@ -20,4 +20,4 @@ The best model is Random Forest with a RMSE = 0.0508. Looking restrospectively, 
 This model takes `discount` as an input and output the predicted occupancy according to the discount and other location-specific factors. The application is a one-click discount solution, an internal tool for revenue optimization team.
 
 #### Disclaimer
-The code files don't contain any WeWork-specific details. The purpose of this repository is strictly for skill demonstrations.
+The code files don't reveal or contain any WeWork-specific information. The purpose of this repository is strictly for skill demonstrations.
