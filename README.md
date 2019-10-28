@@ -1,6 +1,6 @@
 # Demand-Forecast Project
 
--- By Charles Haocheng Bi
+-- By Charles (Haocheng) Bi
 
 ## Goal
 The goal of this project is to forecast demand down to the building level by predicting the metric `occupancy`. The benefits of knowing the occupancy for future months in advance is obvious: it allows the team to decide an optimal discount level to maximize utilization and revenue. 
@@ -14,10 +14,10 @@ I first identified buildings' key performance drivers: market demand, member exp
   * `Price Variable`: discount
 
 ## Results
-The best model is Random Forest with a RMSE = 0.0508. Looking restrospectively, the predictions of the random forest model on average have a mean absolute error less than 3%. This model is recognized by the company leadership as drastically improving discount logic and potentially improving revenue by 9%.
+The best model is Random Forest with a RMSE = 0.0408. Looking restrospectively, the predictions of the random forest model on average have a mean absolute error less than 3%. This model is recognized by the company leadership as drastically improving discount logic and potentially improving revenue by 9%.
 
 ## Applications
-This model takes `discount` as an input and output the predicted occupancy according to the discount and other location-specific factors. The application is a one-click discount solution, an internal tool for revenue optimization team.
+This model takes `discount` as an input and output the predicted occupancy according to the discount and other location-specific factors. One easy application is a one-click discount solution - an internal tool for revenue optimization team.
 
 #### Disclaimer
-The code files don't reveal or contain any WeWork-specific information. The purpose of this repository is strictly for skill demonstrations.
+TThe purpose of this repository is strictly for coding skill demonstrations.
