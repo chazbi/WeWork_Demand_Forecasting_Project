@@ -20,4 +20,4 @@ The best model is Random Forest with a RMSE = 0.0408. Looking restrospectively, 
 The model takes in `discount` as an input and output the predicted occupancy according to the discount and other location-specific factors. One major application is a one-click discount solution, which outputs a projected occupancy rate according to the discount level. Say 80% occupancy is projected at 10% discount while 85% occupancy at 15% discount. Thus, the team can maximize revenue based on the `price (1-discount%)` and `projected occupancy`.
 
 #### Disclaimer
-TThe purpose of this repository is strictly for coding skill demonstrations.
+TThe purpose of this repository is strictly for coding skill demonstrations. All rights reserved.
