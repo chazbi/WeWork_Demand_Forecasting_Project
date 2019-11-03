@@ -1,6 +1,6 @@
 # Demand-Forecast Project
 
--- By Charles Haocheng Bi
+-- By Charles (Haocheng) Bi
 
 ## Goal
 The project goal is to forecast demand down to the building level by predicting the metric `occupancy`. The benefits of knowing the occupancy for future months in advance is obvious: it allows the team to decide an optimal discount level to maximize utilization and revenue. 
