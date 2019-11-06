@@ -8,8 +8,8 @@ The project goal is to forecast demand down to the building level by predicting 
 ## Approach
 I first identified buildings' key performance drivers: market demand, member experience, historical performance, and discount - the price variable. Then I explored 8 internal data sources and 14 tables to extract 31 location-specific features. I listed a couple proxies for each category below.
 
-  * `Market Demand`: # tour booked per sellable capacity, sales time per desk
-  * `Member Experience`: zendesk ticket solve speed, event participation rate
+  * `Market Demand`: # tours booked/completed per sellable capacity, sales time per desk (in days)
+  * `Member Experience`: zendesk ticket solve speed (in days), event participation rate
   * `Historical Performance`: avg occupancy of last 3 month
   * `Price Variable`: discount
 
