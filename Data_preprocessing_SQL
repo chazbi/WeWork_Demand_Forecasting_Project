@@ -1,0 +1,431 @@
+WITH monthly_building_perf AS(
+select
+      l.name,
+      date_trunc('month', i.date)::date as date,
+      l.city,
+      l.market,
+      l.region,
+      case 
+          when datediff(month, l.opened_on_utc, i.date) >= 12 THEN 1
+          when datediff(month, l.opened_on_utc, i.date) between 0 and 11 then 0
+          else -1 end as is_mature,
+      round(sum(i.net_paid_price_usd)/cast(sum(i.occupancy) as float), 3) as net_arpm,
+      round(sum(i.market_price_usd)/cast(sum(i.capacity) as float), 3) as gross_arpm,
+      round(sum(i.occupancy)/cast(sum(i.capacity) as float), 3) as occ,
+      round(sum(i.net_paid_price_usd)/cast(sum(i.market_price_usd) as float), 3) as financial_occ,
+      round(sum(i.net_paid_price_usd - i.usd_price)/cast(sum(i.usd_price) as float), 3) as discount
+from cdm.space_inventory_bom as i
+left join cdm.locations as l
+      on i.location_uuid = l.uuid
+where --i.date between '2015-01-01' and '2019-07-31' and 
+      i.reservable_open_date_utc < i.date and
+      i.sku NOT IN ('HD', 'DD')
+group by 1,2,3,4,5,6
+having net_arpm is not null and financial_occ >= 0 -- filter out abnormal data
+order by 1,2),
+                    
+--------booking data
+booking_lead_time_data AS (
+select 
+      DISTINCT i.reservation_uuid,
+      --i.reservation_created_at_utc::date as reservation_create_date,
+      date_trunc('month', i.reservation_started_on_utc)::date as date,
+      --i.reservation_started_on_utc::date as reservation_start_date,
+      --i.reservation_ended_on_utc::date as reservation_end_date,
+      --i.reservable_open_date_utc::date as reservable_open_date,
+      CAST(DATEDIFF(day, i.reservation_created_at_utc::date, i.reservation_started_on_utc::date) As NUMERIC) AS booking_lead_time,
+      case when datediff(day,i.reservable_open_date_utc::date, i.reservation_started_on_utc::date) < 0 then 1 else 0 end as presale,
+      i.sku,
+      l.name,
+      l.city
+from cdm.space_inventory_bom as i
+left join cdm.locations as l
+       on i.location_uuid = l.uuid
+where  --i.reservation_started_on_utc::date between '2015-01-01' and '2019-07-31' and 
+       datediff(month, l.opened_on_utc, '2019/08/15') > 1 
+       and i.sku NOT IN ('HD', 'DD')
+       and booking_lead_time >= 0
+group by 1,2,3,4,5,6,7
+order by i.reservation_uuid),
+
+-----monthly tour data
+monthly_building_booking AS (
+select name,
+       date,
+       median(booking_lead_time) as median_lead_time,
+       avg(case when booking_lead_time <= 10 then 1.00 else 0.00 end) as rush_booking_pct,
+       avg(presale) as presale_pct 
+from booking_lead_time_data
+group by 1,2
+order by 1,2),
+
+-----tour data
+tour_data AS (
+SELECT sfa.ts::date AS date, 
+       l.name,
+       cast(count(case when sfa.activity = 'tour_created' then 1 end) AS NUMERIC) AS tour_booked,
+       cast(count(case when sfa.activity = 'tour_outcome' and sfa.value = 'Completed' Then 1 END) AS NUMERIC) AS tour_completed
+FROM dw.v_ww_salesfunnel_activity sfa
+JOIN cdm.locations l 
+       on l.uuid = sfa.location_uuid
+--WHERE date between '2015-01-01' and '2019-07-31'
+GROUP BY 1,2
+ORDER BY 2,1),
+
+-----monthly building tour
+monthly_building_tour AS (
+SELECT date_trunc('month', date)::date as date,
+       name,
+       sum(tour_booked) as tour_booked,
+       sum(tour_completed) as tour_completed
+FROM tour_data
+group by 1,2
+order by 2,1),
+
+-----sales data
+sales_data AS (select 
+      date_trunc('month',o.close_date)::date as date,
+      l.name,
+      o.created_date, 
+      o.close_date,
+      o.no_of_desks_unweighted_c as desks_sold,
+      sum(date_diff ('day',created_date,close_date)* no_of_desks_unweighted_c) / sum (no_of_desks_unweighted_c) as days_to_sell
+from salesforce_v2.opportunity o
+left join cdm.locations l on l.uuid = o.building_uuid_c
+where stage_name = 'Closed Won'
+      and o.close_date between '2014-01-01' and '2019-07-31' and no_of_desks_unweighted_c >0
+group by 1,2,3,4,5
+having l.name is not null and 
+       days_to_sell >= 0
+order by 1,2,4,5),
+
+----monthly_building_sales
+monthly_building_sales AS (
+select date,
+       name,
+       sum(desks_sold) as desks_sold,
+       sum(days_to_sell) as total_sales_time
+from sales_data
+group by 1,2
+order by 2,1),
+
+------monthly attrition
+monthly_building_churn AS (
+select month::date as date,
+       location as name,
+       isnull(attrition_perc, 0) as churn_rate
+from dw.mv_monthly_retention_summary 
+where location_level = 'Location' and hotdesk_included = 'FALSE'
+group by 1,2,3
+order by 2,1),
+
+------ zendesk data
+zendesk_tickets AS (
+select location_name as name,
+       date_trunc('month', created_at)::date as date,
+       sum(case when ticket_category = 'printing' then 1 else 0 end) as printing_tickets,
+       sum(case when ticket_category = 'hvac' then 1 else 0 end) as ac_tickets,
+       sum(case when ticket_category = 'billing' then 1 else 0 end) as billing_tickets,
+       sum(case when ticket_category = 'maintenance' then 1 else 0 end) as maintenance_tickets,
+       round(sum(case when ticket_category = 'printing' then hours_to_solved else 0 end),2) as hours_to_solved_printing,
+       round(sum(case when ticket_category = 'hvac' then hours_to_solved else 0 end),2) as hours_to_solved_hvac,
+       round(sum(case when ticket_category = 'billing' then hours_to_solved else 0 end),2) as hours_to_solved_billing,
+       round(sum(case when ticket_category = 'maintenance' then hours_to_solved else 0 end),2) as hours_to_solved_maintenance
+from dw.mv_zendesk_tickets
+where schema = 'cm_zendesk' -- and created_at between '2015-01-01' and '2019-07-31'
+group by 1,2
+order by 1,2),
+
+--------------------------------- sellable capacity queries ------------------------------------
+first_sale AS
+ (
+ SELECT * FROM (
+    SELECT
+        reservable_uuid,
+        DATE_TRUNC('month',created_at) AS first_sale_month,
+        ROW_NUMBER() OVER (PARTITION BY reservable_uuid ORDER BY created_at ASC) as rank
+    FROM dw.mv_fact_reservable_reservation
+    WHERE reservable_archived_at IS NULL
+     )
+  WHERE rank = 1
+ ),
+ 
+ offices AS
+ (
+ SELECT
+     r.reservable_uuid,
+     r.location_uuid,
+     DATE_TRUNC('month',r.created_at) AS office_created_month,
+     DATE_TRUNC('month',l.opened_on) AS building_opened_month,
+     first_sale_month,
+     r.office_type,
+     r.reservable_capacity AS desks
+ FROM dw.mv_dim_reservable r
+LEFT JOIN dw.mv_dim_location l
+    ON l.location_uuid = r.location_uuid
+LEFT JOIN first_sale
+    ON first_sale.reservable_uuid = r.reservable_uuid
+ WHERE reservable_archived_at IS NULL
+ AND DATE_TRUNC('month',r.created_at) < DATE_TRUNC('month',l.opened_on)
+ ),
+ 
+ offices_clean AS
+ (
+ SELECT
+     reservable_uuid,
+     location_uuid,
+     office_created_month,
+     (CASE
+         WHEN first_sale_month <= building_opened_month
+             THEN first_sale_month
+         ELSE building_opened_month
+     END) AS open_or_sold_month,
+     building_opened_month,
+     office_type,
+     desks
+ FROM offices
+ ),
+ 
+ unopened_inventory AS
+ (
+ SELECT
+     start_date AS month,
+     reservable_uuid,
+     location_uuid,
+     case
+       when datediff('month', start_date, building_opened_month) <= 0 then 0
+       else datediff('month', start_date, building_opened_month)
+     end as sellable_for_month,
+     office_type,
+     desks
+ FROM dw.month_series
+ LEFT JOIN offices_clean
+    ON month_series.start_date >= offices_clean.office_created_month
+        AND month_series.start_date <= offices_clean.open_or_sold_month
+),
+
+-- 2. Current Opened with no reservation
+current_sellable as (
+  select v.month, v.reservable_uuid, v.reservation_uuid, v.location_uuid, dim_res.office_type, v.desks
+  from dw.v_public_kpi_occupied_desks v
+  left join dw.mv_dim_reservable dim_res on v.reservable_uuid = dim_res.reservable_uuid
+  where reservation_uuid is null),
+
+-- 3. (the hard part) Sellable because there is a planned move out
+-- and no new reservation
+
+-- 3.a. currently occupied reservables
+currently_occupied as (
+  select v.month, v.reservable_uuid, v.reservation_uuid, v.location_uuid, dim_res.office_type, v.desks
+  from dw.v_public_kpi_occupied_desks v
+  left join dw.mv_dim_reservable dim_res on v.reservable_uuid = dim_res.reservable_uuid
+  where reservation_uuid is not null),
+
+-- 3.b. reservables with a planned move out
+currently_occupied_with_moveouts as (
+select co.*, b.date_gave_notice_est, b.date_ended
+from currently_occupied co
+inner join dw.mv_fact_reservable_reservation b on co.reservation_uuid = b.reservation_uuid
+where b.date_gave_notice_est <= co.month and b.date_ended >= co.month
+),
+
+-- 3.c. reservables with a planned move out
+-- but next move in is already sold!
+above_already_sold as (
+select above.*, b.date_sold_est, b.date_started
+from currently_occupied_with_moveouts above
+inner join dw.mv_fact_reservable_reservation b on above.reservable_uuid = b.reservable_uuid
+where b.date_sold_est <= above.month and b.date_started >= above.date_ended
+),
+
+b_minus_c as (
+select month, reservable_uuid, reservation_uuid, location_uuid, office_type, desks, date_ended
+from currently_occupied_with_moveouts
+EXCEPT
+select month, reservable_uuid, reservation_uuid, location_uuid, office_type, desks, date_ended
+from above_already_sold
+),
+
+-- 4. Open Sellable inventory = a U (b \ c)
+is_sellable_inventory as (
+  select month, location_uuid, office_type, desks, month as sellable_for_date
+  from current_sellable
+  UNION All
+  select month, location_uuid, office_type, desks, date_ended as sellable_for_date 
+  from b_minus_c
+),
+
+-- 4.a
+featured_sellable_inventory as (
+  select
+    month,
+    location_uuid,
+    desks,
+    -- grouping by office type
+    office_type,
+    case
+      when datediff('month', month, sellable_for_date) <= 0 then 0
+      else datediff('month', month, sellable_for_date)
+    end as sellable_for_month
+  from is_sellable_inventory
+),
+
+-- 5. All Sellable Inventory
+all_sellable as (
+  select
+    month,
+    location_uuid,
+    desks,
+    office_type,
+    sellable_for_month
+  from featured_sellable_inventory
+  UNION All
+  select
+    month,
+    location_uuid,
+    desks,
+    office_type,
+    sellable_for_month
+  from unopened_inventory),
+
+monthly_inventory_snapshot AS (
+  SELECT date_trunc('month',inv._run_at) AS month, inv.*, row_number() OVER(PARTITION BY inv.reservable_uuid, date_trunc('month',inv._run_at) ORDER BY inv._run_at ASC) first_in_month
+  FROM dw.mv_sellable_reservables_weekly_history inv
+  where capacity<>market_price
+),
+
+
+-- monthly_building_sellable_capacity:
+monthly_building_sellable_capacity as (
+select
+  month,
+  location_uuid,
+  sellable_for_month,
+  office_type,
+  sum(desks) as desks
+from all_sellable
+-- we started inventory snapshotting in Feb, so we'll cut off the workaround for before that point in time
+where month < '2019-09-01'
+group by 1, 2, 3, 4
+
+union all
+
+-- we started inventory snapshotting in Feb, so using this from here on out
+select 
+  month::date as date, 
+  location_uuid,
+  case
+    when datediff('month', month, sellable_for) <= 0 then 0
+    else datediff('month', month, sellable_for) end as sellable_for_month,
+  off_type AS office_type, 
+  sum(capacity)
+from monthly_inventory_snapshot
+where first_in_month = 1 -- and month between '2015-01-01' and '2019-07-31'
+group by 1, 2, 3, 4
+order by 2,1),
+
+final_sellable_capacity as (
+select sc.month as date,
+       l.name,
+       sum(sc.sellable_for_month) as sellable_capacity,
+       sum(sc.desks) as total_capacity
+from monthly_building_sellable_capacity sc
+join cdm.locations l
+on l.uuid = sc.location_uuid
+group by 2,1
+order by 2,1
+),
+
+-------location events
+monthly_building_events as (
+    select date_trunc('month', e.start_datetime)::date                                as date,
+           cl.name                                                                    as name,
+           isnull(sum((event_type = 'community_building_cm_choice') :: integer),0)    as community_building_cm_choice_event_count,
+           isnull(sum((event_type = 'other') :: integer),0)                           as other_event_count,
+           isnull(sum((event_type = 'happy_hours') :: integer),0)                     as happy_hours_event_count,
+           isnull(sum((event_type = 'tgim') :: integer),0)                            as tgim_event_count,
+           isnull(sum((event_type = 'business_development') :: integer),0)            as business_development_event_count,
+           isnull(sum(
+             (event_type = 'lunch_and_learn_food_for_thought') :: integer),0)         as lunch_and_learn_food_for_thought_event_count,
+           isnull(sum((event_type = 'office_hours') :: integer),0)                    as office_hours_event_count,
+           isnull(sum((event_type = 'communtiy_event') :: integer),0)                 as communtiy_event_event_count,
+           isnull(sum((event_type = 'new_member_orientation') :: integer),0)          as new_member_orientation_event_count,
+           isnull(sum((event_type = 'wellness') :: integer),0)                        as wellness_event_count,
+           isnull(count(*),0)                                                         as total_events,
+           isnull(sum(attendances_count),0)                                           as total_attendees
+    from mena_public.events e
+           left join mena_public.locations l on l.id = e.location_id
+           join cdm.locations cl on cl.uuid = l.uuid
+    where l.uuid is not null
+    group by 1, 2
+    order by 2, 1)
+
+----final data
+select p.name,
+       p.date,
+       extract(MONTH FROM p.date) as month,
+       extract(YEAR FROM p.date) as year,
+       p.city,
+       p.market,
+       p.region,
+       p.is_mature,
+       p.net_arpm,
+       p.gross_arpm,
+       p.occ,
+       p.financial_occ,
+       p.discount,
+       b.median_lead_time, 
+       b.rush_booking_pct,
+       t.tour_booked,
+       t.tour_completed,
+       s.desks_sold,
+       s.total_sales_time,
+       c.churn_rate,
+       cast(sc.sellable_capacity as float),
+       sc.total_capacity,
+       (sc.total_capacity - sc.sellable_capacity) as occupied_capacity,
+       cast(z.printing_tickets as float) as printing_issue_count,
+       cast(z.ac_tickets as float) as ac_issue_count,
+       cast(z.billing_tickets as float) as billing_issue_count,
+       cast(z.maintenance_tickets as float) as maintenance_issue_count,
+       round(case when z.hours_to_solved_printing = 0 then 0 else z.hours_to_solved_printing / z.printing_tickets end, 2) as printing_issue_solve_speed,
+       round(case when z.hours_to_solved_hvac = 0 then 0 else z.hours_to_solved_hvac / z.ac_tickets end, 2) as ac_issue_solve_speed,
+       round(case when z.hours_to_solved_billing = 0 then 0 else z.hours_to_solved_billing / z.billing_tickets end, 2) as billing_issue_solve_speed,
+       round(case when z.hours_to_solved_maintenance = 0 then 0 else z.hours_to_solved_maintenance / z.maintenance_tickets end, 2) as maintenance_issue_solve_speed,
+       cast(e.happy_hours_event_count as float) as happy_hour_event,
+       cast(e.tgim_event_count as float) as tgim_event,
+       cast(e.business_development_event_count as float) as business_development_event,
+       cast(e.lunch_and_learn_food_for_thought_event_count as float) as food_for_thought_event,
+       cast(e.office_hours_event_count as float) as office_hour_event,
+       cast(e.communtiy_event_event_count as float) as community_event,
+       cast(e.new_member_orientation_event_count as float) as orientation_event,
+       cast(e.wellness_event_count as float) as wellness_event,
+       cast(e.other_event_count as float) as other_event,
+       cast(e.total_events as float) as total_event,
+       cast(e.total_attendees as float) as total_attendee
+       
+from monthly_building_perf p
+join monthly_building_booking b
+     on p.name = b.name and 
+        p.date = b.date
+join monthly_building_tour t
+     on p.name = t.name and
+        p.date = t.date 
+join monthly_building_sales s
+     on p.name = s.name and
+        p.date = s.date
+join monthly_building_churn c
+     on p.name = c.name and
+        p.date = c.date
+join zendesk_tickets z
+     on p.name = z.name and
+        p.date = z.date
+join final_sellable_capacity sc
+     on p.name = sc.name and
+        p.date = sc.date
+join monthly_building_events e
+     on p.name = e.name and
+        p.date = e.date
+where p.date between '2015-01-01' and '2019-07-01'
+order by 1,2
+")
